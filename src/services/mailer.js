@@ -1,27 +1,6 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  pool: true,
-  maxConnections: 1,
-  auth: {
-    user: "staysafe.ofc@gmail.com",
-    pass: process.env.SENHA_DE_APP,
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
-
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("SMTP FAIL:", error);
-  } else {
-    console.info("SMTP READY");
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendAlertEmail(userEmail, dependentName, emittedAt, latitude, longitude, address) {
   if (!userEmail) return;
@@ -48,29 +27,34 @@ async function sendAlertEmail(userEmail, dependentName, emittedAt, latitude, lon
     `;
   }
 
-  const mailOptions = {
-    from: '"Stay Safe Alertas" <staysafe.ofc@gmail.com>',
-    to: userEmail,
-    subject: `🚨 ALERTA DE EMERGÊNCIA: ${dependentName} precisa de ajuda!`,
-    html: `
-      <div style="font-family: Arial, sans-serif; padding: 20px; color: #1f2937;">
-        <h2 style="color: #dc2626;">🚨 Alerta de Emergência Acionado</h2>
-        <p>Olá,</p>
-        <p>O perfil dependente <strong>${dependentName}</strong> acaba de acionar o botão de socorro.</p>
-        <p><strong>Horário de ativação:</strong> ${dateStr} às ${timeStr}</p>
-        ${locationHtml}
-        <p style="margin-top: 16px;">Por favor, verifique o aplicativo imediatamente para mais detalhes ou para tomar as ações necessárias.</p>
-        <br/>
-        <p style="font-size: 12px; color: #6b7280;">Este é um email automático do sistema Stay Safe.</p>
-      </div>
-    `,
-  };
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; color: #1f2937;">
+      <h2 style="color: #dc2626;">🚨 Alerta de Emergência Acionado</h2>
+      <p>Olá,</p>
+      <p>O perfil dependente <strong>${dependentName}</strong> acaba de acionar o botão de socorro.</p>
+      <p><strong>Horário de ativação:</strong> ${dateStr} às ${timeStr}</p>
+      ${locationHtml}
+      <p style="margin-top: 16px;">Por favor, verifique o aplicativo imediatamente para mais detalhes ou para tomar as ações necessárias.</p>
+      <br/>
+      <p style="font-size: 12px; color: #6b7280;">Este é um email automático do sistema Stay Safe.</p>
+    </div>
+  `;
 
   try {
-    await transporter.sendMail(mailOptions);
-    console.info(`Email de alerta enviado para ${userEmail}`);
+    const { data, error } = await resend.emails.send({
+      from: "Stay Safe <onboarding@resend.dev>",
+      to: userEmail,
+      subject: `🚨 ALERTA DE EMERGÊNCIA: ${dependentName} precisa de ajuda!`,
+      html: htmlContent,
+    });
+
+    if (error) {
+      console.error("[ALERT] Erro ao enviar email", error);
+    } else {
+      console.info("[ALERT] Email enviado com sucesso", data);
+    }
   } catch (error) {
-    console.error("Erro ao enviar email de alerta:", error);
+    console.error("[ALERT] Erro ao enviar email", error);
   }
 }
 
