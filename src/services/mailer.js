@@ -53,7 +53,7 @@ async function sendAlertEmail(userEmail, dependentName, emittedAt, latitude, lon
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`Email de alerta enviado para ${userEmail}`);
+    console.info(`Email de alerta enviado para ${userEmail}`);
   } catch (error) {
     console.error("Erro ao enviar email de alerta:", error);
   }

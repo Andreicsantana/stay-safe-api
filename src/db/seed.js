@@ -3,7 +3,7 @@ const bcrypt = require("bcrypt");
 const { pool } = require("./pool");
 
 async function seed() {
-  console.log("Seeding database...");
+  console.info("Seeding database...");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -26,10 +26,10 @@ async function seed() {
         [name, email, passwordHash]
       );
       userId = rows[0].id;
-      console.log(`User ${email} created.`);
+      console.info(`User ${email} created.`);
     } else {
       userId = existingUsers[0].id;
-      console.log(`User ${email} already exists.`);
+      console.info(`User ${email} already exists.`);
     }
 
     // 2. Create carer profile
@@ -46,10 +46,10 @@ async function seed() {
         [userId, carerName]
       );
       carerId = rows[0].id;
-      console.log(`Carer profile ${carerName} created.`);
+      console.info(`Carer profile ${carerName} created.`);
     } else {
       carerId = existingCarers[0].id;
-      console.log(`Carer profile ${carerName} already exists.`);
+      console.info(`Carer profile ${carerName} already exists.`);
     }
 
     // 3. Create dependent profile
@@ -68,10 +68,10 @@ async function seed() {
         [userId, depName, pinHash]
       );
       dependentId = rows[0].id;
-      console.log(`Dependent profile ${depName} created.`);
+      console.info(`Dependent profile ${depName} created.`);
     } else {
       dependentId = existingDeps[0].id;
-      console.log(`Dependent profile ${depName} already exists.`);
+      console.info(`Dependent profile ${depName} already exists.`);
     }
 
     // 4. Create relationship
@@ -81,10 +81,10 @@ async function seed() {
        ON CONFLICT (carer_profile_id, dependent_profile_id) DO NOTHING`,
       [carerId, dependentId]
     );
-    console.log("Relationship between Carer and Dependent verified/created.");
+    console.info("Relationship between Carer and Dependent verified/created.");
 
     await client.query("COMMIT");
-    console.log("Seeding complete successfully!");
+    console.info("Seeding complete successfully!");
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("Error seeding database:", e);

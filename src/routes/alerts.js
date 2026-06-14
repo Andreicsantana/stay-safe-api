@@ -156,7 +156,7 @@ router.post("/emit", async (req, res) => {
       [dependentProfileId]
     );
     if (userRows[0] && userRows[0].email) {
-      console.log(`[ALERT] Disparando email para o usuário cadastrado: ${userRows[0].email}`);
+      console.info(`[ALERT] Disparando email para o usuário cadastrado: ${userRows[0].email}`);
       sendAlertEmail(userRows[0].email, dependentName, alert.emitted_at, alert.latitude, alert.longitude, alert.address);
     }
   } catch (e) {
@@ -171,7 +171,7 @@ router.post("/emit", async (req, res) => {
       );
       if (
         check[0] &&
-        !["resolved_carer", "resolved_dependent", "escalated", "cancelled"].includes(check[0].status)
+        !["acknowledged", "resolved_carer", "resolved_dependent", "escalated", "cancelled"].includes(check[0].status)
       ) {
         await pool.query(
           `UPDATE alerts SET status = 'escalated', escalated_at = NOW() WHERE id = $1`,
@@ -182,7 +182,7 @@ router.post("/emit", async (req, res) => {
     } catch (e) {
       console.error("Auto-escalate error:", e);
     }
-  }, parseInt(process.env.ESCALATE_MS) || 120000);
+  }, parseInt(process.env.ESCALATE_MS) || 30000);
 
   res.status(201).json({ alertId: alert.id, status: alert.status, emittedAt: alert.emitted_at });
   } catch (err) {

@@ -54,7 +54,7 @@ function initWs(server) {
 
   wss.on("close", () => clearInterval(interval));
 
-  console.log("WebSocket server initialized");
+  console.info("WebSocket server initialized");
 }
 
 function sendToProfile(profileId, payload) {

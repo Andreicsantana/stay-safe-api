@@ -56,7 +56,7 @@ async function start() {
   await initDb();
   initWs(server);
   server.listen(PORT, () => {
-    console.log(`Stay Safe API running on port ${PORT}`);
+    console.info(`Stay Safe API running on port ${PORT}`);
   });
 }
 

@@ -57,7 +57,7 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_relationships_carer ON relationships(carer_profile_id);
       CREATE INDEX IF NOT EXISTS idx_relationships_dependent ON relationships(dependent_profile_id);
     `);
-    console.log("Database initialized");
+    console.info("Database initialized");
   } finally {
     client.release();
   }
