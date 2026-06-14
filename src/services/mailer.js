@@ -1,11 +1,26 @@
 const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  pool: true,
+  maxConnections: 1,
   auth: {
     user: "staysafe.ofc@gmail.com",
     pass: process.env.SENHA_DE_APP,
   },
+  tls: {
+    rejectUnauthorized: false,
+  },
+});
+
+transporter.verify((error, success) => {
+  if (error) {
+    console.error("SMTP FAIL:", error);
+  } else {
+    console.info("SMTP READY");
+  }
 });
 
 async function sendAlertEmail(userEmail, dependentName, emittedAt, latitude, longitude, address) {
