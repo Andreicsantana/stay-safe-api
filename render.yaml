@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: stay-safe-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node src/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ESCALATE_MS
+        value: "30000"
+      - key: FRONTEND_URL
+        value: https://stay-safe-app.netlify.app
+      - key: RESEND_API_KEY
+        sync: false

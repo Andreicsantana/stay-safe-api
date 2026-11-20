@@ -13,6 +13,7 @@ const profileRoutes = require("./routes/profiles");
 const userRoutes = require("./routes/users");
 
 const app = express();
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 
 // CORS

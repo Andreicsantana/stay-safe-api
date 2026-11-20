@@ -58,7 +58,7 @@ router.post("/select-profile", async (req, res, next) => {
   try {
     // Verify profile belongs to user
     const { rows: profiles } = await pool.query(
-      "SELECT id, name, role FROM profiles WHERE id = $1 AND user_id = $2",
+      "SELECT id, user_id, name, role FROM profiles WHERE id = $1 AND user_id = $2",
       [profileId, userId]
     );
 

@@ -8,9 +8,12 @@ async function initDb() {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
+        phone TEXT,
         password_hash TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
 
       CREATE TABLE IF NOT EXISTS profiles (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,7 +45,10 @@ async function initDb() {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         dependent_profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
         status TEXT NOT NULL DEFAULT 'pending'
-          CHECK (status IN ('pending','notified','acknowledged','resolved_carer','resolved_dependent','escalated')),
+          CHECK (status IN ('pending','notified','acknowledged','resolved_carer','resolved_dependent','escalated','cancelled')),
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
+        address TEXT,
         emitted_at TIMESTAMPTZ DEFAULT NOW(),
         acknowledged_at TIMESTAMPTZ,
         resolved_at TIMESTAMPTZ,
@@ -50,6 +56,10 @@ async function initDb() {
         resolved_by TEXT,
         notes TEXT
       );
+
+      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS address TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_alerts_dependent ON alerts(dependent_profile_id);
       CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);

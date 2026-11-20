@@ -87,7 +87,7 @@ router.get("/", async (req, res) => {
 });
 
 // ── POST /api/alerts/emit ───────────────────────────────────────────────────
-router.post("/emit", async (req, res) => {
+router.post("/emit", requireRole("dependent"), async (req, res) => {
   const dependentProfileId = req.profile.id;
   const { latitude, longitude } = req.body || {};
 
