@@ -1,381 +1,132 @@
-# 🚨 API — Sistema de Alertas para Dependentes
+# Stay Safe API
 
-API RESTful do sistema de monitoramento e alertas em tempo real para cuidadores e dependentes.
+Backend service for **Stay Safe**, an emergency alert system designed for elderly dependents and their family carers. Provides authentication, profile management, real-time WebSocket notifications, geolocation reverse-geocoding, email alerts, and automatic alert escalation.
 
-Hospedada no Render, a API centraliza autenticação, gestão de perfis, envio de notificações e o ciclo de vida dos alertas de emergência.
+## Tech Stack
 
----
+- **Runtime**: Node.js (>= 18)
+- **Framework**: Express 5
+- **Database**: PostgreSQL (`pg`)
+- **Real-time**: WebSocket (`ws`)
+- **Auth & Security**: `jsonwebtoken`, `bcrypt`, `express-rate-limit`, `cors`
+- **Email**: Resend (`resend`)
+- **Geocoding**: OpenStreetMap Nominatim (non-blocking, 3s timeout)
+- **Testing & Lint**: `node:test`, `supertest`, ESLint
 
-## 📐 Arquitetura Geral
-
-```text
-Cliente (React / Expo)
-        │
-        ▼
-   API REST (Node.js / Express)
-        │
-        ├── Autenticação (JWT + bcrypt)
-        ├── Notificações (Resend — e-mail)
-        ├── Geocodificação (Nominatim)
-        │
-        ▼
- Banco de Dados (PostgreSQL / Supabase)
-```
-
----
-
-## 🛠️ Tecnologias
-
-### Node.js
-
-Ambiente de execução JavaScript no servidor. Toda a API é construída sobre Node.js utilizando Express.
-
-```js
-// server.js
-import express from 'express';
-
-const app = express();
-
-app.use(express.json());
-
-app.listen(3000, () => {
-  console.log('API rodando na porta 3000');
-});
-```
-
-### JavaScript (ES Modules)
-
-O projeto utiliza módulos ES nativos (`import/export`) em toda a base de código.
-
-```js
-// routes/alerts.js
-import { Router } from 'express';
-import { createAlert } from '../controllers/alertController.js';
-
-const router = Router();
-
-router.post('/', createAlert);
-
-export default router;
-```
-
-### bcrypt
-
-Utilizado para armazenar senhas de forma segura através de hashing.
-
-```js
-import bcrypt from 'bcrypt';
-
-const SALT_ROUNDS = 10;
-
-// Ao criar usuário
-const passwordHash = await bcrypt.hash(
-  plainPassword,
-  SALT_ROUNDS
-);
-
-// Ao fazer login
-const isValid = await bcrypt.compare(
-  plainPassword,
-  storedHash
-);
-
-if (!isValid) {
-  throw new Error('Credenciais inválidas');
-}
-```
-
-### JWT (JSON Web Tokens)
-
-Controle de autenticação stateless utilizando access token e refresh token.
-
-```js
-import jwt from 'jsonwebtoken';
-
-// Gerar access token
-const accessToken = jwt.sign(
-  {
-    profileId: profile.id,
-    role: profile.role
-  },
-  process.env.JWT_SECRET,
-  {
-    expiresIn: '15m'
-  }
-);
-
-// Middleware de autenticação
-const verifyToken = (req, res, next) => {
-  const token =
-    req.headers.authorization?.split(' ')[1];
-
-  try {
-    req.user = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
-
-    next();
-  } catch {
-    res.status(401).json({
-      error: 'Token inválido ou expirado'
-    });
-  }
-};
-```
-
-### Resend
-
-Serviço responsável pelo envio de e-mails transacionais.
-
-```js
-import { Resend } from 'resend';
-
-const resend = new Resend(
-  process.env.RESEND_API_KEY
-);
-
-await resend.emails.send({
-  from: 'alertas@seudominio.com',
-  to: carer.email,
-  subject: '🚨 Alerta de emergência recebido',
-  html: `
-    <h2>Alerta de ${dependent.name}</h2>
-    <p>Localização: ${alert.address}</p>
-    <p>
-      Emitido em:
-      ${new Date(alert.emitted_at)
-        .toLocaleString('pt-BR')}
-    </p>
-  `
-});
-```
-
-### Nominatim (OpenStreetMap)
-
-Serviço de geocodificação reversa utilizado para converter coordenadas GPS em endereços legíveis.
-
-```js
-const getAddress = async (
-  latitude,
-  longitude
-) => {
-  const url =
-    `https://nominatim.openstreetmap.org/reverse` +
-    `?lat=${latitude}` +
-    `&lon=${longitude}` +
-    `&format=json`;
-
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'SistemaAlertas/1.0'
-    }
-  });
-
-  const data = await response.json();
-
-  return data.display_name;
-};
-```
-
-### Express Router
-
-Organização modular das rotas da API utilizando o Router do Express.
-
-```js
-// app.js
-import alertRoutes from './routes/alerts.js';
-import profileRoutes from './routes/profiles.js';
-import authRoutes from './routes/auth.js';
-
-app.use('/api/auth', authRoutes);
-app.use('/api/profiles', profileRoutes);
-app.use('/api/alerts', alertRoutes);
-```
-
-### PostgreSQL via Supabase
-
-Banco de dados relacional hospedado no Supabase.
-
-```js
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-const { data, error } = await supabase
-  .from('alerts')
-  .select('*')
-  .eq('dependent_profile_id', profileId)
-  .eq('status', 'pending');
-```
-
----
-
-## 🗄️ Modelagem do Banco de Dados
-
-### Diagrama das Entidades Principais
+## Project Structure
 
 ```text
-users (1) ──────< profiles (N)
-                     │
-          ┌──────────┴──────────┐
-          │                     │
-     [role=carer]         [role=dependent]
-          │                     │
-          └──< carer_dependent_links >──┘
-                                │
-                           alerts (N)
-                                │
-                    alert_notifications (N)
-                                │
-                          escalations
+src/
+├── app.js                     # Express app factory & middleware
+├── index.js                   # Server entrypoint, env check, graceful shutdown
+├── db/
+│   ├── init.js                # Schema initialization
+│   ├── pool.js                # PostgreSQL connection pool
+│   └── seed.js                # Demo account seed
+├── middleware/
+│   └── auth.js                # Profile JWT & account JWT middlewares
+├── repositories/
+│   ├── alertRepository.js     # Alert SQL queries
+│   └── profileRepository.js   # Profile SQL queries
+├── routes/
+│   ├── alerts.js              # Alert lifecycle endpoints
+│   ├── auth.js                # Login & profile session endpoints
+│   ├── profiles.js            # Profile CRUD endpoints
+│   └── users.js               # Account registration
+├── services/
+│   ├── escalationWorker.js    # Persistent DB-backed escalation poller
+│   └── mailer.js              # Resend email notification builder
+├── utils/
+│   ├── alertFormatter.js      # Consistent alert serialization & Maps URL
+│   └── pinRateLimit.js        # Per-profile PIN attempt limiter
+└── ws/
+    └── server.js              # WebSocket server & event broadcasting
 ```
 
-### Tabelas e Responsabilidades
+## Getting Started
 
-| Tabela                | Responsabilidade                              |
-| --------------------- | --------------------------------------------- |
-| users                 | Conta de acesso (e-mail e senha hash)         |
-| profiles              | Perfil de utilização do sistema               |
-| carer_dependent_links | Relacionamento entre cuidadores e dependentes |
-| devices               | Dispositivos registrados                      |
-| device_tokens         | Tokens para notificações                      |
-| alerts                | Registro dos alertas emitidos                 |
-| alert_notifications   | Histórico das notificações enviadas           |
-| escalations           | Escalonamentos para serviços de emergência    |
-| refresh_tokens        | Sessões persistentes                          |
-| relationships         | Relacionamentos simplificados                 |
-
-### Ciclo de Vida de um Alerta
-
-```text
-pending
-   │
-   ▼
-notified
-   │
-   ├──► acknowledged
-   │          │
-   │          ├──► resolved_carer
-   │          └──► resolved_dependent
-   │
-   └──► escalated
-
-cancelled
-```
-
----
-
-## 🔐 Variáveis de Ambiente
-
-Crie um arquivo `.env` na raiz do projeto.
-
-```env
-# Servidor
-PORT=3000
-NODE_ENV=development
-
-# Supabase
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-
-# JWT
-JWT_SECRET=sua-chave-secreta-longa-e-aleatoria
-JWT_REFRESH_SECRET=outra-chave-secreta
-
-# Resend
-RESEND_API_KEY=re_xxxxxxxxxxxx
-
-# Frontend
-CLIENT_URL=https://seu-frontend.vercel.app
-```
-
----
-
-## 🚀 Como Rodar Localmente
+### 1. Install dependencies
 
 ```bash
-# Instalar dependências
 npm install
+```
 
-# Configurar variáveis de ambiente
-cp .env.example .env
+### 2. Configure environment variables
 
-# Executar em desenvolvimento
+Create a `.env` file in the project root:
+
+```env
+PORT=3001
+NODE_ENV=development
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+JWT_SECRET=your-secret-key
+ESCALATE_MS=30000
+FRONTEND_URL=http://localhost:5173
+RESEND_API_KEY=re_xxxxxxxxx
+EMAIL_FROM=Stay Safe <onboarding@resend.dev>
+```
+
+### 3. Run locally
+
+```bash
 npm run dev
 ```
 
-A API ficará disponível em:
+Seed demo data (optional):
 
-```text
-http://localhost:3000
+```bash
+npm run seed
 ```
 
----
+### 4. Lint & Tests
 
-## 📡 Principais Endpoints
-
-| Método | Endpoint                      | Descrição                      |
-| ------ | ----------------------------- | ------------------------------ |
-| POST   | `/api/auth/register`          | Cria usuário e perfil inicial  |
-| POST   | `/api/auth/login`             | Realiza autenticação           |
-| POST   | `/api/auth/refresh`           | Renova access token            |
-| GET    | `/api/profiles/:id`           | Busca perfil                   |
-| POST   | `/api/alerts`                 | Emite alerta de emergência     |
-| PATCH  | `/api/alerts/:id/acknowledge` | Confirma recebimento           |
-| PATCH  | `/api/alerts/:id/resolve`     | Marca alerta como resolvido    |
-| GET    | `/api/alerts/:dependentId`    | Lista alertas de um dependente |
-
----
-
-## ☁️ Deploy (Render)
-
-A API é hospedada no Render como um Web Service.
-
-```text
-Build Command: npm install
-Start Command: npm start
+```bash
+npm run lint
+npm test
 ```
 
-Características:
+## API Endpoints
 
-* Deploy integrado ao GitHub
-* Configuração de variáveis de ambiente pelo painel do Render
-* Reinício automático em caso de falha
-* Logs centralizados para monitoramento
+### Health
+- `GET /health` — Checks API and PostgreSQL connectivity (`200` / `503`).
 
----
+### Users & Auth
+- `POST /api/users/register` — Register a family account (`name`, `email`, `phone`, `password`).
+- `POST /api/auth/login` — Authenticate and receive `accountToken` + `profiles` (each with `hasPin`).
+- `POST /api/auth/select-profile` — Issue a 7-day profile JWT (`accessToken`). Requires `accountToken`.
+- `POST /api/auth/create-profile` — Create a `carer` or `dependent` profile. Requires `accountToken`.
+- `PATCH /api/auth/update-profile` — Update profile name or PIN. Requires `accountToken`.
+- `DELETE /api/auth/delete-profile` — Delete a profile. Requires `accountToken`.
+- `POST /api/auth/force-logout` — Disconnect a dependent device via WebSocket. Requires `accountToken`.
 
-## 📁 Estrutura do Projeto
+### Profiles (Profile JWT)
+- `GET /api/profiles/me` — Current authenticated profile.
+- `GET /api/profiles/my` — All profiles for the account.
+- `POST /api/profiles` — Create a profile.
+- `PATCH /api/profiles/:id` — Update a profile.
+- `DELETE /api/profiles/:id` — Delete a profile.
+- `GET /api/profiles/dependents` — List dependent profiles (`carer` only).
 
-```text
-api/
-├── src/
-│   ├── controllers/
-│   │   ├── authController.js
-│   │   ├── alertController.js
-│   │   └── profileController.js
-│   │
-│   ├── middlewares/
-│   │   ├── authMiddleware.js
-│   │   └── errorHandler.js
-│   │
-│   ├── routes/
-│   │   ├── auth.js
-│   │   ├── alerts.js
-│   │   └── profiles.js
-│   │
-│   ├── services/
-│   │   ├── notificationService.js
-│   │   └── geocodingService.js
-│   │
-│   └── lib/
-│       └── supabase.js
-│
-├── .env.example
-├── server.js
-└── package.json
-```
+### Alerts (Profile JWT)
+- `GET /api/alerts/active` — Active alerts for the current user/profile.
+- `GET /api/alerts/active-for-me` — Latest active alert for the authenticated `dependent`.
+- `GET /api/alerts?limit=20&offset=0` — Alert history.
+- `GET /api/alerts/:id` — Single alert details.
+- `POST /api/alerts/emit` — Emit an emergency alert (`dependent` only, optional `latitude`/`longitude`).
+- `POST /api/alerts/:id/acknowledge` — Mark alert as acknowledged (`carer` only).
+- `POST /api/alerts/:id/resolve` — Resolve alert (carer without PIN; dependent with PIN if configured, rate-limited to 5 failed attempts per 5 minutes).
+
+## WebSocket Events (`/ws?token=<accessToken>`)
+
+- `CONNECTED` — Initial handshake confirmation.
+- `ALERT_STATE` — Initial active alert state sent on connect/reconnect.
+- `NEW_ALERT` — Broadcast to carers when a dependent emits an alert.
+- `ALERT_UPDATED` — Broadcast to carers when reverse-geocoded `address` completes.
+- `ALERT_ACKNOWLEDGED` — Broadcast to dependent when a carer confirms they are on the way.
+- `ALERT_RESOLVED` — Broadcast to all when an alert is resolved.
+- `ALERT_ESCALATED` — Broadcast to all after `ESCALATE_MS` (default 30s) without response.
+- `FORCE_LOGOUT` — Forces the target profile to sign out.
+
+## Deployment
+
+Configured for **Render** (`render.yaml`) and **Railway** (`railway.json`). Set `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`, `RESEND_API_KEY`, and `NODE_ENV=production` in your hosting environment.
