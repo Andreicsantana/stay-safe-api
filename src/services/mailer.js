@@ -42,7 +42,7 @@ function buildAlertEmailPayload(userEmail, dependentName, emittedAt, latitude, l
   `;
 
   return {
-    from: "Stay Safe <onboarding@resend.dev>",
+    from: process.env.EMAIL_FROM || "Stay Safe <onboarding@resend.dev>",
     to: userEmail,
     subject: `ALERTA: ${dependentName} pediu ajuda`,
     html,

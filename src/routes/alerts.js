@@ -4,39 +4,44 @@ const { pool } = require("../db/pool");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const {
   notifyCarersOfAlert,
+  notifyCarersOfAlertUpdate,
   notifyDependentOfAck,
   notifyAllOfResolution,
-  notifyAllOfEscalation,
 } = require("../ws/server");
 const { sendAlertEmail } = require("../services/mailer");
 const { buildMapsUrl, formatAlert } = require("../utils/alertFormatter");
 const { isPinBlocked, recordPinFailure, clearPinFailures } = require("../utils/pinRateLimit");
+const {
+  findActiveAlertsByUserId,
+  findActiveAlertsByDependentId,
+  findAlertHistoryByUserId,
+  findAlertHistoryByDependentId,
+  updateAlertAddress,
+} = require("../repositories/alertRepository");
 
 router.use(authMiddleware);
 
-const ACTIVE_CARER_QUERY = `
-  SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-         a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-         p.name AS dependent_name, a.dependent_profile_id
-  FROM alerts a
-  JOIN profiles p ON p.id = a.dependent_profile_id
-  WHERE p.user_id = $1
-    AND p.role = 'dependent'
-    AND a.status NOT IN ('resolved_carer','resolved_dependent','cancelled')
-  ORDER BY a.emitted_at DESC
-`;
-
-const HISTORY_CARER_QUERY = `
-  SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-         a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-         p.name AS dependent_name, a.dependent_profile_id
-  FROM alerts a
-  JOIN profiles p ON p.id = a.dependent_profile_id
-  WHERE p.user_id = $1
-    AND p.role = 'dependent'
-  ORDER BY a.emitted_at DESC
-  LIMIT $2 OFFSET $3
-`;
+function parseCoordinates(latitude, longitude) {
+  if (latitude == null && longitude == null) {
+    return { valid: true, lat: null, lng: null };
+  }
+  if (latitude == null || longitude == null) {
+    return { valid: false };
+  }
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    return { valid: false };
+  }
+  return { valid: true, lat, lng };
+}
 
 async function fetchAddressFromNominatim(latitude, longitude) {
   try {
@@ -61,23 +66,10 @@ async function fetchAddressFromNominatim(latitude, longitude) {
 router.get("/active", async (req, res, next) => {
   try {
     const { id: profileId, role } = req.profile;
-
-    let rows;
-    if (role === "dependent") {
-      ({ rows } = await pool.query(
-        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-                a.dependent_profile_id, p.name AS dependent_name
-         FROM alerts a
-         JOIN profiles p ON p.id = a.dependent_profile_id
-         WHERE a.dependent_profile_id = $1
-           AND a.status NOT IN ('resolved_carer','resolved_dependent','cancelled')
-         ORDER BY a.emitted_at DESC`,
-        [profileId]
-      ));
-    } else {
-      ({ rows } = await pool.query(ACTIVE_CARER_QUERY, [req.userId]));
-    }
+    const rows =
+      role === "dependent"
+        ? await findActiveAlertsByDependentId(profileId)
+        : await findActiveAlertsByUserId(req.userId);
 
     res.json({ activeAlerts: rows.map(formatAlert) });
   } catch (err) {
@@ -87,19 +79,7 @@ router.get("/active", async (req, res, next) => {
 
 router.get("/active-for-me", requireRole("dependent"), async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-              a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-              a.dependent_profile_id, p.name AS dependent_name
-       FROM alerts a
-       JOIN profiles p ON p.id = a.dependent_profile_id
-       WHERE a.dependent_profile_id = $1
-         AND a.status IN ('pending', 'notified', 'acknowledged', 'escalated')
-       ORDER BY a.emitted_at DESC
-       LIMIT 1`,
-      [req.profile.id]
-    );
-
+    const rows = await findActiveAlertsByDependentId(req.profile.id, 1);
     res.json({ alert: rows[0] ? formatAlert(rows[0]) : null });
   } catch (err) {
     next(err);
@@ -112,22 +92,10 @@ router.get("/", async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const offset = parseInt(req.query.offset, 10) || 0;
 
-    let rows;
-    if (role === "dependent") {
-      ({ rows } = await pool.query(
-        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-                a.dependent_profile_id, p.name AS dependent_name
-         FROM alerts a
-         JOIN profiles p ON p.id = a.dependent_profile_id
-         WHERE a.dependent_profile_id = $1
-         ORDER BY a.emitted_at DESC
-         LIMIT $2 OFFSET $3`,
-        [profileId, limit, offset]
-      ));
-    } else {
-      ({ rows } = await pool.query(HISTORY_CARER_QUERY, [req.userId, limit, offset]));
-    }
+    const rows =
+      role === "dependent"
+        ? await findAlertHistoryByDependentId(profileId, limit, offset)
+        : await findAlertHistoryByUserId(req.userId, limit, offset);
 
     res.json({ alerts: rows.map(formatAlert) });
   } catch (err) {
@@ -138,8 +106,11 @@ router.get("/", async (req, res, next) => {
 router.post("/emit", requireRole("dependent"), async (req, res) => {
   const dependentProfileId = req.profile.id;
   const { latitude, longitude } = req.body || {};
-  const lat = latitude != null ? Number(latitude) : null;
-  const lng = longitude != null ? Number(longitude) : null;
+  const coords = parseCoordinates(latitude, longitude);
+  if (!coords.valid) {
+    return res.status(400).json({ error: "Coordenadas inválidas" });
+  }
+  const { lat, lng } = coords;
 
   try {
     const { rows: profileRows } = await pool.query(
@@ -191,10 +162,13 @@ router.post("/emit", requireRole("dependent"), async (req, res) => {
       fetchAddressFromNominatim(lat, lng).then(async (resolvedAddress) => {
         if (!resolvedAddress) return;
         try {
-          await pool.query("UPDATE alerts SET address = $1 WHERE id = $2", [
-            resolvedAddress,
-            alert.id,
-          ]);
+          const updated = await updateAlertAddress(alert.id, resolvedAddress);
+          if (updated) {
+            await notifyCarersOfAlertUpdate(
+              dependentProfileId,
+              formatAlert({ ...updated, dependent_name: dependentName })
+            );
+          }
         } catch (err) {
           console.error("Erro ao atualizar endereço do alerta:", err);
         }
@@ -223,29 +197,6 @@ router.post("/emit", requireRole("dependent"), async (req, res) => {
     } catch (e) {
       console.error("Erro ao buscar email para notificação:", e);
     }
-
-    setTimeout(async () => {
-      try {
-        const { rows: check } = await pool.query(
-          `SELECT status FROM alerts WHERE id = $1`,
-          [alert.id]
-        );
-        if (
-          check[0] &&
-          !["acknowledged", "resolved_carer", "resolved_dependent", "escalated", "cancelled"].includes(
-            check[0].status
-          )
-        ) {
-          await pool.query(
-            `UPDATE alerts SET status = 'escalated', escalated_at = NOW() WHERE id = $1`,
-            [alert.id]
-          );
-          await notifyAllOfEscalation(dependentProfileId, alert.id);
-        }
-      } catch (e) {
-        console.error("Auto-escalate error:", e);
-      }
-    }, parseInt(process.env.ESCALATE_MS, 10) || 30000);
 
     res.status(201).json({
       id: alert.id,

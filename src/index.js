@@ -1,65 +1,53 @@
 require("dotenv").config();
-const express = require("express");
 const http = require("http");
-const cors = require("cors");
-const rateLimit = require("express-rate-limit");
 
+const { createApp } = require("./app");
+const { pool } = require("./db/pool");
 const { initDb } = require("./db/init");
 const { initWs } = require("./ws/server");
+const { startEscalationWorker } = require("./services/escalationWorker");
 
-const authRoutes = require("./routes/auth");
-const alertRoutes = require("./routes/alerts");
-const profileRoutes = require("./routes/profiles");
-const userRoutes = require("./routes/users");
+const REQUIRED_ENV = ["DATABASE_URL", "JWT_SECRET"];
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    console.error(`Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
 
-const app = express();
-app.set("trust proxy", 1);
+const app = createApp();
 const server = http.createServer(app);
-
-// CORS
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
-
-app.use(express.json());
-
-// Rate limit global
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-}));
-
-// Health check
-app.get("/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
-
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/alerts", alertRoutes);
-app.use("/api/profiles", profileRoutes);
-app.use("/api/users", userRoutes);
-
-// 404
-app.use((req, res) => res.status(404).json({ error: "Rota não encontrada" }));
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(err.status || 500).json({ error: err.message || "Erro interno" });
-});
-
 const PORT = process.env.PORT || 3001;
+
+let wss = null;
+let stopWorker = null;
 
 async function start() {
   await initDb();
-  initWs(server);
+  wss = initWs(server);
+  stopWorker = startEscalationWorker();
   server.listen(PORT, () => {
     console.info(`Stay Safe API running on port ${PORT}`);
   });
 }
+
+async function shutdown(signal) {
+  console.info(`Received ${signal}, shutting down...`);
+  if (stopWorker) stopWorker();
+  if (wss) {
+    wss.close();
+  }
+  server.close(async () => {
+    try {
+      await pool.end();
+    } finally {
+      process.exit(0);
+    }
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 start().catch((e) => {
   console.error("Failed to start:", e);

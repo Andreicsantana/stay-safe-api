@@ -1,59 +1,44 @@
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
-const { pool } = require("../db/pool");
 const { formatAlert } = require("../utils/alertFormatter");
+const {
+  findActiveAlertsByDependentId,
+  findActiveAlertsByUserId,
+} = require("../repositories/alertRepository");
+const {
+  findProfileById,
+  findCarerProfileIdsByDependentId,
+} = require("../repositories/profileRepository");
 
 const connections = new Map();
 
 async function sendInitialAlertState(ws, profileId) {
   try {
-    const { rows: profileRows } = await pool.query(
-      "SELECT id, user_id, role FROM profiles WHERE id = $1",
-      [profileId]
-    );
-    const profile = profileRows[0];
+    const profile = await findProfileById(profileId);
     if (!profile) return;
 
     if (profile.role === "dependent") {
-      const { rows } = await pool.query(
-        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-                a.dependent_profile_id, p.name AS dependent_name
-         FROM alerts a
-         JOIN profiles p ON p.id = a.dependent_profile_id
-         WHERE a.dependent_profile_id = $1
-           AND a.status IN ('pending', 'notified', 'acknowledged', 'escalated')
-         ORDER BY a.emitted_at DESC
-         LIMIT 1`,
-        [profile.id]
-      );
+      const rows = await findActiveAlertsByDependentId(profile.id, 1);
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: "ALERT_STATE",
-          alert: rows[0] ? formatAlert(rows[0]) : null,
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "ALERT_STATE",
+            alert: rows[0] ? formatAlert(rows[0]) : null,
+          })
+        );
       }
       return;
     }
 
     if (profile.role === "carer") {
-      const { rows } = await pool.query(
-        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
-                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
-                a.dependent_profile_id, p.name AS dependent_name
-         FROM alerts a
-         JOIN profiles p ON p.id = a.dependent_profile_id
-         WHERE p.user_id = $1
-           AND p.role = 'dependent'
-           AND a.status IN ('pending', 'notified', 'acknowledged', 'escalated')
-         ORDER BY a.emitted_at DESC`,
-        [profile.user_id]
-      );
+      const rows = await findActiveAlertsByUserId(profile.user_id);
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: "ALERT_STATE",
-          activeAlerts: rows.map(formatAlert),
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "ALERT_STATE",
+            activeAlerts: rows.map(formatAlert),
+          })
+        );
       }
     }
   } catch (e) {
@@ -77,6 +62,10 @@ function initWs(server) {
     try {
       const payload = jwt.verify(token, process.env.JWT_SECRET);
       profileId = payload.profileId;
+      if (!profileId) {
+        ws.close(4002, "Invalid token");
+        return;
+      }
     } catch {
       ws.close(4002, "Invalid token");
       return;
@@ -88,7 +77,9 @@ function initWs(server) {
     ws.profileId = profileId;
     ws.isAlive = true;
 
-    ws.on("pong", () => { ws.isAlive = true; });
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
     ws.on("close", () => {
       const set = connections.get(profileId);
       if (set) {
@@ -112,6 +103,7 @@ function initWs(server) {
   wss.on("close", () => clearInterval(interval));
 
   console.info("WebSocket server initialized");
+  return wss;
 }
 
 function sendToProfile(profileId, payload) {
@@ -123,28 +115,23 @@ function sendToProfile(profileId, payload) {
   });
 }
 
-async function getCarerProfileIds(dependentProfileId) {
-  const { rows } = await pool.query(
-    `SELECT p.id AS carer_profile_id
-     FROM profiles p
-     WHERE p.user_id = (
-       SELECT user_id FROM profiles WHERE id = $1
-     )
-     AND p.role = 'carer'`,
-    [dependentProfileId]
-  );
-  return rows.map((r) => r.carer_profile_id);
-}
-
-async function notifyCarersOfAlert(dependentProfileId, alertData) {
+async function notifyCarers(dependentProfileId, payload) {
   try {
-    const carerIds = await getCarerProfileIds(dependentProfileId);
+    const carerIds = await findCarerProfileIdsByDependentId(dependentProfileId);
     carerIds.forEach((carerId) => {
-      sendToProfile(carerId, { type: "NEW_ALERT", ...alertData });
+      sendToProfile(carerId, payload);
     });
   } catch (e) {
     console.error("notifyCarers error:", e);
   }
+}
+
+async function notifyCarersOfAlert(dependentProfileId, alertData) {
+  await notifyCarers(dependentProfileId, { type: "NEW_ALERT", ...alertData });
+}
+
+async function notifyCarersOfAlertUpdate(dependentProfileId, alertData) {
+  await notifyCarers(dependentProfileId, { type: "ALERT_UPDATED", ...alertData });
 }
 
 async function notifyDependentOfAck(dependentProfileId, alertId) {
@@ -164,14 +151,7 @@ async function notifyAllOfResolution(dependentProfileId, carerProfileId, alertId
     status,
   };
   sendToProfile(dependentProfileId, payload);
-  try {
-    const carerIds = await getCarerProfileIds(dependentProfileId);
-    carerIds.forEach((carerId) => {
-      sendToProfile(carerId, payload);
-    });
-  } catch (e) {
-    console.error("notifyAllOfResolution error:", e);
-  }
+  await notifyCarers(dependentProfileId, payload);
 }
 
 async function notifyAllOfEscalation(dependentProfileId, alertId) {
@@ -183,18 +163,14 @@ async function notifyAllOfEscalation(dependentProfileId, alertId) {
     message: "Ninguém respondeu ainda. Estamos tentando outras pessoas.",
   };
   sendToProfile(dependentProfileId, payload);
-  try {
-    const carerIds = await getCarerProfileIds(dependentProfileId);
-    carerIds.forEach((carerId) => sendToProfile(carerId, payload));
-  } catch (e) {
-    console.error("notifyAllOfEscalation error:", e);
-  }
+  await notifyCarers(dependentProfileId, payload);
 }
 
 module.exports = {
   initWs,
   sendToProfile,
   notifyCarersOfAlert,
+  notifyCarersOfAlertUpdate,
   notifyDependentOfAck,
   notifyAllOfResolution,
   notifyAllOfEscalation,

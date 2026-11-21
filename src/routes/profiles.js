@@ -91,40 +91,4 @@ router.get("/dependents", async (req, res) => {
   res.json({ dependents: rows });
 });
 
-// POST /api/profiles/relationships - link carer to dependent
-router.post("/relationships", async (req, res) => {
-  const { carerProfileId, dependentProfileId } = req.body;
-  if (!carerProfileId || !dependentProfileId)
-    return res.status(400).json({ error: "carerProfileId e dependentProfileId obrigatórios" });
-
-  const { rows: carer } = await pool.query(
-    `SELECT id FROM profiles WHERE id = $1 AND user_id = $2 AND role = 'carer'`,
-    [carerProfileId, req.userId]
-  );
-  if (!carer[0]) return res.status(404).json({ error: "Perfil cuidador não encontrado" });
-
-  const { rows: dep } = await pool.query(
-    `SELECT id FROM profiles WHERE id = $1 AND user_id = $2 AND role = 'dependent'`,
-    [dependentProfileId, req.userId]
-  );
-  if (!dep[0]) return res.status(404).json({ error: "Perfil dependente não encontrado" });
-
-  await pool.query(
-    `INSERT INTO relationships (carer_profile_id, dependent_profile_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [carerProfileId, dependentProfileId]
-  );
-  res.status(201).json({ linked: true });
-});
-
-// DELETE /api/profiles/relationships
-router.delete("/relationships", async (req, res) => {
-  const { carerProfileId, dependentProfileId } = req.body;
-  await pool.query(
-    `DELETE FROM relationships WHERE carer_profile_id = $1 AND dependent_profile_id = $2`,
-    [carerProfileId, dependentProfileId]
-  );
-  res.json({ unlinked: true });
-});
-
 module.exports = router;
