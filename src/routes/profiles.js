@@ -13,13 +13,13 @@ router.get("/me", async (req, res) => {
 // GET /api/profiles/my - all profiles of the user
 router.get("/my", async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT id, name, role, created_at FROM profiles WHERE user_id = $1 ORDER BY created_at`,
+    `SELECT id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin", created_at
+     FROM profiles WHERE user_id = $1 ORDER BY created_at`,
     [req.userId]
   );
   res.json({ profiles: rows });
 });
 
-// POST /api/profiles - create a new profile
 router.post("/", async (req, res) => {
   const { name, role, pin } = req.body;
   if (!name || !role) return res.status(400).json({ error: "Nome e role são obrigatórios" });
@@ -32,13 +32,12 @@ router.post("/", async (req, res) => {
   const { rows } = await pool.query(
     `INSERT INTO profiles (user_id, name, role, dismiss_pin)
      VALUES ($1, $2, $3, $4)
-     RETURNING id, name, role, created_at`,
+     RETURNING id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin", created_at`,
     [req.userId, name.trim(), role, dismiss_pin]
   );
   res.status(201).json({ profile: rows[0] });
 });
 
-// PATCH /api/profiles/:id - update profile
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
   const { name, pin } = req.body;
@@ -62,13 +61,13 @@ router.patch("/:id", async (req, res) => {
 
   values.push(id);
   const { rows } = await pool.query(
-    `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${i} RETURNING id, name, role`,
+    `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${i}
+     RETURNING id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin"`,
     values
   );
   res.json({ profile: rows[0] });
 });
 
-// DELETE /api/profiles/:id
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
   const { rowCount } = await pool.query(
@@ -79,12 +78,11 @@ router.delete("/:id", async (req, res) => {
   res.json({ deleted: true });
 });
 
-// GET /api/profiles/dependents - carers see all dependents of the same user
 router.get("/dependents", async (req, res) => {
   if (req.profile.role !== "carer") return res.status(403).json({ error: "Apenas cuidadores" });
 
   const { rows } = await pool.query(
-    `SELECT id, name, role, created_at
+    `SELECT id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin", created_at
      FROM profiles
      WHERE user_id = $1 AND role = 'dependent'
      ORDER BY created_at`,

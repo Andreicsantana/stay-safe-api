@@ -4,15 +4,14 @@ const { pool } = require("../db/pool");
 async function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Token não fornecido" });
+    return res.status(401).json({ error: "Sua sessão expirou. Entre novamente." });
   }
 
   const token = header.slice(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    // Attach profile + user info to request
     const { rows } = await pool.query(
-      `SELECT p.id, p.user_id, p.name, p.role, u.email
+      `SELECT p.id, p.user_id, p.name, p.role, (p.dismiss_pin IS NOT NULL) AS "hasPin", u.email
        FROM profiles p
        JOIN users u ON u.id = p.user_id
        WHERE p.id = $1`,
@@ -23,7 +22,7 @@ async function authMiddleware(req, res, next) {
     req.userId = rows[0].user_id;
     next();
   } catch (e) {
-    return res.status(401).json({ error: "Token inválido ou expirado" });
+    return res.status(401).json({ error: "Sua sessão expirou. Entre novamente." });
   }
 }
 

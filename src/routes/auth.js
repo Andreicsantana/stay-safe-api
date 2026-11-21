@@ -30,7 +30,8 @@ router.post("/login", async (req, res, next) => {
 
     // Get profiles for user
     const { rows: profiles } = await pool.query(
-      "SELECT id, name, role, created_at FROM profiles WHERE user_id = $1 ORDER BY created_at",
+      `SELECT id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin", created_at
+       FROM profiles WHERE user_id = $1 ORDER BY created_at`,
       [user.id]
     );
 
@@ -58,7 +59,8 @@ router.post("/select-profile", async (req, res, next) => {
   try {
     // Verify profile belongs to user
     const { rows: profiles } = await pool.query(
-      "SELECT id, user_id, name, role FROM profiles WHERE id = $1 AND user_id = $2",
+      `SELECT id, user_id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin"
+       FROM profiles WHERE id = $1 AND user_id = $2`,
       [profileId, userId]
     );
 
@@ -92,7 +94,7 @@ router.post("/select-profile", async (req, res, next) => {
     let dependents = [];
     if (profile.role === "carer") {
       const { rows } = await pool.query(
-        `SELECT id, name, role
+        `SELECT id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin"
          FROM profiles
          WHERE user_id = $1 AND role = 'dependent'
          ORDER BY created_at`,
@@ -104,6 +106,7 @@ router.post("/select-profile", async (req, res, next) => {
     res.json({
       accessToken,
       refreshToken,
+      profile,
       dependents,
     });
   } catch (e) {
@@ -141,7 +144,7 @@ router.post("/create-profile", async (req, res, next) => {
     const { rows } = await pool.query(
       `INSERT INTO profiles (user_id, name, role, dismiss_pin)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, name, role, created_at`,
+       RETURNING id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin", created_at`,
       [userId, name.trim(), role, dismiss_pin]
     );
 
@@ -185,7 +188,8 @@ router.patch("/update-profile", async (req, res, next) => {
 
     values.push(profileId);
     const { rows } = await pool.query(
-      `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${i} RETURNING id, name, role`,
+      `UPDATE profiles SET ${updates.join(", ")} WHERE id = $${i}
+       RETURNING id, name, role, (dismiss_pin IS NOT NULL) AS "hasPin"`,
       values
     );
 

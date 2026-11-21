@@ -1,9 +1,65 @@
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../db/pool");
+const { formatAlert } = require("../utils/alertFormatter");
 
-// Map: profileId -> Set<WebSocket>
 const connections = new Map();
+
+async function sendInitialAlertState(ws, profileId) {
+  try {
+    const { rows: profileRows } = await pool.query(
+      "SELECT id, user_id, role FROM profiles WHERE id = $1",
+      [profileId]
+    );
+    const profile = profileRows[0];
+    if (!profile) return;
+
+    if (profile.role === "dependent") {
+      const { rows } = await pool.query(
+        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
+                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
+                a.dependent_profile_id, p.name AS dependent_name
+         FROM alerts a
+         JOIN profiles p ON p.id = a.dependent_profile_id
+         WHERE a.dependent_profile_id = $1
+           AND a.status IN ('pending', 'notified', 'acknowledged', 'escalated')
+         ORDER BY a.emitted_at DESC
+         LIMIT 1`,
+        [profile.id]
+      );
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "ALERT_STATE",
+          alert: rows[0] ? formatAlert(rows[0]) : null,
+        }));
+      }
+      return;
+    }
+
+    if (profile.role === "carer") {
+      const { rows } = await pool.query(
+        `SELECT a.id, a.status, a.emitted_at, a.acknowledged_at, a.resolved_at,
+                a.escalated_at, a.notes, a.latitude, a.longitude, a.address,
+                a.dependent_profile_id, p.name AS dependent_name
+         FROM alerts a
+         JOIN profiles p ON p.id = a.dependent_profile_id
+         WHERE p.user_id = $1
+           AND p.role = 'dependent'
+           AND a.status IN ('pending', 'notified', 'acknowledged', 'escalated')
+         ORDER BY a.emitted_at DESC`,
+        [profile.user_id]
+      );
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "ALERT_STATE",
+          activeAlerts: rows.map(formatAlert),
+        }));
+      }
+    }
+  } catch (e) {
+    console.error("sendInitialAlertState error:", e);
+  }
+}
 
 function initWs(server) {
   const wss = new WebSocket.Server({ server, path: "/ws" });
@@ -42,6 +98,7 @@ function initWs(server) {
     });
 
     ws.send(JSON.stringify({ type: "CONNECTED", profileId }));
+    await sendInitialAlertState(ws, profileId);
   });
 
   const interval = setInterval(() => {
@@ -66,20 +123,24 @@ function sendToProfile(profileId, payload) {
   });
 }
 
-// Notify all CARER profiles of the same user as the dependent
+async function getCarerProfileIds(dependentProfileId) {
+  const { rows } = await pool.query(
+    `SELECT p.id AS carer_profile_id
+     FROM profiles p
+     WHERE p.user_id = (
+       SELECT user_id FROM profiles WHERE id = $1
+     )
+     AND p.role = 'carer'`,
+    [dependentProfileId]
+  );
+  return rows.map((r) => r.carer_profile_id);
+}
+
 async function notifyCarersOfAlert(dependentProfileId, alertData) {
   try {
-    const { rows } = await pool.query(
-      `SELECT p.id AS carer_profile_id
-       FROM profiles p
-       WHERE p.user_id = (
-         SELECT user_id FROM profiles WHERE id = $1
-       )
-       AND p.role = 'carer'`,
-      [dependentProfileId]
-    );
-    rows.forEach((r) => {
-      sendToProfile(r.carer_profile_id, { type: "NEW_ALERT", ...alertData });
+    const carerIds = await getCarerProfileIds(dependentProfileId);
+    carerIds.forEach((carerId) => {
+      sendToProfile(carerId, { type: "NEW_ALERT", ...alertData });
     });
   } catch (e) {
     console.error("notifyCarers error:", e);
@@ -87,23 +148,26 @@ async function notifyCarersOfAlert(dependentProfileId, alertData) {
 }
 
 async function notifyDependentOfAck(dependentProfileId, alertId) {
-  sendToProfile(dependentProfileId, { type: "ALERT_ACKNOWLEDGED", alertId });
+  sendToProfile(dependentProfileId, {
+    type: "ALERT_ACKNOWLEDGED",
+    id: alertId,
+    alertId,
+    status: "acknowledged",
+  });
 }
 
-async function notifyAllOfResolution(dependentProfileId, carerProfileId, alertId) {
-  sendToProfile(dependentProfileId, { type: "ALERT_RESOLVED", alertId });
+async function notifyAllOfResolution(dependentProfileId, carerProfileId, alertId, status) {
+  const payload = {
+    type: "ALERT_RESOLVED",
+    id: alertId,
+    alertId,
+    status,
+  };
+  sendToProfile(dependentProfileId, payload);
   try {
-    const { rows } = await pool.query(
-      `SELECT p.id AS carer_profile_id
-       FROM profiles p
-       WHERE p.user_id = (
-         SELECT user_id FROM profiles WHERE id = $1
-       )
-       AND p.role = 'carer'`,
-      [dependentProfileId]
-    );
-    rows.forEach((r) => {
-      sendToProfile(r.carer_profile_id, { type: "ALERT_RESOLVED", alertId });
+    const carerIds = await getCarerProfileIds(dependentProfileId);
+    carerIds.forEach((carerId) => {
+      sendToProfile(carerId, payload);
     });
   } catch (e) {
     console.error("notifyAllOfResolution error:", e);
@@ -111,18 +175,17 @@ async function notifyAllOfResolution(dependentProfileId, carerProfileId, alertId
 }
 
 async function notifyAllOfEscalation(dependentProfileId, alertId) {
-  sendToProfile(dependentProfileId, { type: "ALERT_ESCALATED", alertId });
+  const payload = {
+    type: "ALERT_ESCALATED",
+    id: alertId,
+    alertId,
+    status: "escalated",
+    message: "Ninguém respondeu ainda. Estamos tentando outras pessoas.",
+  };
+  sendToProfile(dependentProfileId, payload);
   try {
-    const { rows } = await pool.query(
-      `SELECT p.id AS carer_profile_id
-       FROM profiles p
-       WHERE p.user_id = (
-         SELECT user_id FROM profiles WHERE id = $1
-       )
-       AND p.role = 'carer'`,
-      [dependentProfileId]
-    );
-    rows.forEach((r) => sendToProfile(r.carer_profile_id, { type: "ALERT_ESCALATED", alertId }));
+    const carerIds = await getCarerProfileIds(dependentProfileId);
+    carerIds.forEach((carerId) => sendToProfile(carerId, payload));
   } catch (e) {
     console.error("notifyAllOfEscalation error:", e);
   }
